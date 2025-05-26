@@ -1,0 +1,241 @@
+---
+title: "Informe Final Analisis de Comorbilidades COVID-19 e Influenza en México"
+author: "Lizbeth Giovana Rodríguez Sánchez"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(dplyr)
+library(readr)
+library(ggplot2)
+library(plotly)
+```
+## Introducción
+La coinfección por SARS-CoV-2 e Influenza puede agravar los síntomas clínicos, incrementar el riesgo de hospitalización e ingreso a cuidados intensivos y elevar la tasa de mortalidad. Asimismo, las comorbilidades como diabetes, hipertensión y obesidad se han identificado como factores que incrementan el riesgo de complicaciones graves en pacientes con infecciones respiratorias virales, por lo que su análisis conjunto resulta de gran interés. En México hay escasa información pública que caracterice a los pacientes coinfectados y sus desenlaces clínicos, por lo que una investigación mediante análisis de datos obtenidos por fuentes y población mexicana puede ser útil en este contexto. 
+
+Este proyecto tiene como finalidad explorar y caracterizar los casos de coinfección respiratoria (COVID-19 e Influenza) registrados en México a través de los datos abiertos de la Dirección General de Epidemiología. Esto en el marco de interés profesional de la autora, quien se dedica a la investigación científica con enfoque en salud (Física médica), particularmente en el análisis de datos en imágenes médicas de pacientes con enfermedades respiratorias, por lo que enfocarse en datos clínicos y epidemiológicos puede resultar más accesible de manejar. Se busca identificar la prevalencia de coinfección y evaluar si existen diferencias significativas en la severidad clínica entre pacientes con coinfección vs aquellos con una sola infección. De manera complementaria, se pretende analizar el papel de las comorbilidades en la evolución clínica de estos pacientes.
+
+# Hipótesis
+
+ La coinfección por SARS-CoV-2 e Influenza, en presencia de comorbilidades, se asocia con mayor riesgo de ingreso a cuidados intensivos (UCI) y mortalidad, en comparación con infecciones únicas sin comorbilidades.
+
+# Objetivo general
+ Analizar la prevalencia y características clínicas de los casos de coinfección respiratoria por COVID-19 e Influenza en México, considerando la influencia de comorbilidades.
+Objetivos específicos:
+•	Identificar los casos de coinfección registrados mediante la frecuencia (grafica de barras, histogramas).
+•	Comparar tasas de hospitalización, ingreso a UCI y mortalidad entre casos con coinfección y casos con una sola infección.
+•	Evaluar la asociación entre comorbilidades y severidad clínica en casos de infección simple y coinfección.
+Base de datos "Influenza, COVID-19 y otros virus respiratorios" (DGE, México):
+•	Publicada por la Dirección General de Epidemiología (DGE) de la Secretaría de Salud de México es un recurso oficial y abierto que contiene información detallada sobre casos de enfermedades respiratorias. Incluye variables demográficas, clínicas, de laboratorio, comorbilidades y evolución del paciente. Se encuentra en formato CSV y es de libre acceso en: https://www.gob.mx/salud/documentos/datos-abiertos-152127
+•	Se encuentra actualizada al 13/05/2025
+•	Contiene datos de más de 250,000 pacientes con enfermedades respiratorias.
+
+
+## Carga y visualizacion de datos
+
+```{r carga}
+data <- read.csv("C:/Users/lizbe/Documents/R/COVID19MEXICO.csv")
+str(data)
+summary(data$EDAD)
+table(data$SEXO)
+table(data$TIPO_PACIENTE)
+```
+
+## Limpieza y transformación
+
+```{r limpieza}
+# Filtrado: casos confirmados o sospechosos
+datos_filtrados <- data %>%
+  filter(CLASIFICACION_FINAL_COVID %in% c(1,2,3) | CLASIFICACION_FINAL_FLU %in% c(1,2,3))
+
+# Variables a limpiar
+comorbilidades <- c("DIABETES", "OBESIDAD", "HIPERTENSION", "EPOC", "ASMA",
+                    "INMUSUPR", "CARDIOVASCULAR", "RENAL_CRONICA")
+variables_no_especificado <- c("SEXO", "TIPO_PACIENTE", "INTUBADO", "UCI", comorbilidades)
+
+# Reemplazar 97–99 por NA
+datos_filtrados[variables_no_especificado] <- lapply(
+  datos_filtrados[variables_no_especificado], 
+  function(x) ifelse(x %in% c(97,98,99), NA, x)
+)
+
+# Variable de coinfección
+datos_filtrados <- datos_filtrados %>%
+  mutate(coinfeccion = ifelse(CLASIFICACION_FINAL_COVID %in% c(1,2,3) &
+                                CLASIFICACION_FINAL_FLU %in% c(1,2,3), "Sí", "No"))
+
+# Reemplazar NA en comorbilidades con 0
+datos_filtrados[comorbilidades] <- lapply(datos_filtrados[comorbilidades], function(x) ifelse(is.na(x), 0, x))
+
+# Variable total de comorbilidades
+datos_filtrados <- datos_filtrados %>%
+  mutate(COMORBILIDADES = rowSums(across(all_of(comorbilidades))))
+```
+
+## Medidas de tendencia central por coinfección
+
+```{r tendencias}
+datos_filtrados %>%
+  group_by(coinfeccion) %>%
+  summarise(
+    media_edad = mean(EDAD, na.rm = TRUE),
+    mediana_edad = median(EDAD, na.rm = TRUE)
+  )
+```
+
+## Coinfección vs comorbilidades
+
+```{r grafico_comorbilidades, results='asis'}
+tabla_resumen <- datos_filtrados %>%
+  group_by(coinfeccion, COMORBILIDADES) %>%
+  summarise(CASOS = n())
+
+p <- ggplot(tabla_resumen, aes(x = as.factor(COMORBILIDADES), y = CASOS, fill = coinfeccion)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Coinfección respiratoria vs Comorbilidades",
+       x = "Número de comorbilidades",
+       y = "Casos",
+       fill = "Coinfección") +
+  theme_minimal()
+
+ggplotly(p)
+```
+
+## Nueva variable de severidad clínica
+
+```{r severidad}
+datos_filtrados <- datos_filtrados %>%
+  mutate(SEVERIDAD = case_when(
+    UCI == 1 ~ "Grave",
+    INTUBADO == 1 ~ "Moderado",
+    TIPO_PACIENTE == 2 ~ "Moderado",
+    TRUE ~ "Leve"
+  ))
+table(datos_filtrados$SEVERIDAD)
+```
+
+##  Casos totales por estado
+
+```{r barras_estado_total}
+casos_estado <- datos_filtrados %>%
+  group_by(ENTIDAD_RES, coinfeccion) %>%
+  summarise(casos = n())
+
+p_estado <- ggplot(casos_estado, aes(x = as.factor(ENTIDAD_RES), y = casos, fill = coinfeccion)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Casos totales por entidad", x = "Entidad federativa", y = "Casos") +
+  theme_minimal()
+
+ggplotly(p_estado)
+```
+
+## Coinfecciones por estado (porcentaje)
+
+```{r barras_estado_coinfeccion}
+porc_estado <- datos_filtrados %>%
+  group_by(ENTIDAD_RES, coinfeccion) %>%
+  summarise(casos = n()) %>%
+  group_by(ENTIDAD_RES) %>%
+  mutate(porcentaje = casos / sum(casos) * 100)
+
+p_porc <- ggplot(porc_estado, aes(x = as.factor(ENTIDAD_RES), y = porcentaje, fill = coinfeccion)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Proporción de coinfección por entidad", x = "Entidad federativa", y = "% Coinfección") +
+  theme_minimal()
+
+ggplotly(p_porc)
+```
+
+## Coinfección vs severidad
+
+```{r coinfeccion_severidad}
+tabla_severidad <- datos_filtrados %>%
+  group_by(coinfeccion, SEVERIDAD) %>%
+  summarise(CASOS = n())
+
+p3 <- ggplot(tabla_severidad, aes(x = SEVERIDAD, y = CASOS, fill = coinfeccion)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Coinfección vs severidad clínica",
+       x = "Severidad",
+       y = "Casos",
+       fill = "Coinfección") +
+  theme_minimal()
+
+ggplotly(p3)
+```
+
+###  Distribución de comorbilidades entre casos con/sin coinfección
+
+```{r histograma_comorbilidades}
+# Histograma de comorbilidades por coinfección
+p_hist <- ggplot(datos_filtrados, aes(x = COMORBILIDADES, fill = coinfeccion)) +
+  geom_histogram(position = "identity", alpha = 0.7, binwidth = 1) +
+  labs(title = "Distribución de Comorbilidades",
+       subtitle = "Comparación entre casos con y sin coinfección",
+       x = "Número de Comorbilidades", 
+       y = "Cantidad de Pacientes",
+       fill = "Coinfección") +
+  scale_fill_manual(values = c("Sí" = "pink", "No" = "green")) +
+  theme_minimal() +
+  facet_wrap(~coinfeccion, ncol = 1)
+
+p_hist
+```
+
+###  Conteo total de casos con y sin coinfección
+
+```{r barra_coinfeccion_total}
+# Conteo de casos con/sin coinfección
+p_bar <- ggplot(datos_filtrados, aes(x = coinfeccion, fill = coinfeccion)) +
+  geom_bar() +
+  labs(title = "Número de casos según coinfección",
+       x = "Coinfección",
+       y = "Cantidad de casos") +
+  theme_minimal()
+
+p_bar
+```
+
+### Porcentaje de UCI e intubación según coinfección
+
+```{r desenlaces_coinfeccion}
+datos_resumen <- datos_filtrados %>%
+  group_by(coinfeccion) %>%
+  summarise(
+    "UCI" = mean(UCI == 1, na.rm = TRUE) * 100,
+    "Intubación" = mean(INTUBADO == 1, na.rm = TRUE) * 100
+  ) %>%
+  tidyr::pivot_longer(cols = c(UCI, Intubación), 
+                      names_to = "Desenlace", 
+                      values_to = "Porcentaje")
+
+p_desenlace <- ggplot(datos_resumen, aes(x = coinfeccion, y = Porcentaje, fill = Desenlace)) +
+  geom_col(position = "dodge") +
+  labs(title = "Porcentaje de casos graves por coinfección",
+       x = "Coinfección (COVID + Influenza)",
+       y = "Porcentaje (%)",
+       fill = "Desenlace") +
+  scale_fill_manual(values = c("UCI" = "blue", "Intubación" = "red")) +
+  theme_minimal()
+
+p_desenlace
+```
+
+
+## Conclusiones
+
+Baja prevalencia de coinfección: La coinfección por SARS-CoV-2 e Influenza representa un porcentaje reducido dentro del total de casos respiratorios registrados en México, lo que indica que es un fenómeno poco común en la población general durante el periodo analizado.
+
+-Coinfección asociada a múltiples comorbilidades: Los casos de coinfección se presentan con mayor frecuencia en pacientes que reportan siete o más comorbilidades, lo cual sugiere que individuos con un perfil clínico más comprometido son más susceptibles a adquirir múltiples infecciones virales de forma simultánea.
+
+-Severidad clínica similar a infecciones simples: Al comparar indicadores como ingreso a UCI o necesidad de intubación, no se observan diferencias significativas entre los casos coinfectados y aquellos con infección única por COVID-19 o Influenza. Esto podría indicar que la presencia de coinfección, por sí sola, no incrementa sustancialmente la severidad clínica.
+
+-Concentración geográfica en zonas urbanas: La Ciudad de México destaca como una de las entidades con mayor número de casos reportados, tanto simples como coinfectados, lo que puede estar relacionado con su densidad poblacional, mayor capacidad diagnóstica y concentración de centros hospitalarios.
+
+
+
+## Github: 
+https://github.com/giovanarodr/InformeCOVID
